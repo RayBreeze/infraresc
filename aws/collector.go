@@ -3,37 +3,49 @@ package aws
 import (
 	"context"
 	"fmt"
+
+	"infraresc/state"
 )
 
 type Collector struct {
-	discovery *Discovery
+	discovery     *Discovery
+	relationships *RelationshipDiscovery
 }
 
 func NewCollector(client *Client) *Collector {
 	return &Collector{
-		discovery: NewDiscovery(client),
+		discovery:     NewDiscovery(client),
+		relationships: NewRelationshipDiscovery(client),
 	}
 }
 
 func (c *Collector) Collect(
 	ctx context.Context,
-) ([]string, error) {
-
-	if err := c.discovery.CheckRecorderConfiguration(ctx); err != nil {
-		return nil, err
-	}
-
-	if err := c.discovery.CheckRecorder(ctx); err != nil {
-		return nil, err
-	}
+) (*state.Infrastructure, error) {
 
 	resources, err := c.discovery.Resources(ctx)
+
 	if err != nil {
 		return nil, fmt.Errorf(
-			"collecting AWS resources: %w",
+			"discovering resources: %w",
 			err,
 		)
 	}
 
-	return resources, nil
+	edges, err := c.relationships.Discover(
+		ctx,
+		resources,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf(
+			"discovering relationships: %w",
+			err,
+		)
+	}
+
+	return &state.Infrastructure{
+		Resources: resources,
+		Edges:     edges,
+	}, nil
 }

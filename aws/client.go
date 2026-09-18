@@ -8,12 +8,16 @@ import (
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/resourceexplorer2"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 type Client struct {
-	Config awsv2.Config
-	STS    *sts.Client
+	Config           awsv2.Config
+	STS              *sts.Client
+	EC2              *ec2.Client
+	ResourceExplorer *resourceexplorer2.Client
 }
 
 type CallerIdentity struct {
@@ -50,8 +54,10 @@ func NewClient(
 	}
 
 	return &Client{
-		Config: cfg,
-		STS:    sts.NewFromConfig(cfg),
+		Config:           cfg,
+		STS:              sts.NewFromConfig(cfg),
+		EC2:              ec2.NewFromConfig(cfg),
+		ResourceExplorer: resourceexplorer2.NewFromConfig(cfg),
 	}, nil
 }
 
@@ -108,9 +114,7 @@ func ProfileRegion(
 		)
 	}
 
-	region := strings.TrimSpace(
-		string(output),
-	)
+	region := strings.TrimSpace(string(output))
 
 	if region == "" {
 		return "", fmt.Errorf(
@@ -123,7 +127,6 @@ func ProfileRegion(
 }
 
 func stringValue(value *string) string {
-
 	if value == nil {
 		return ""
 	}
