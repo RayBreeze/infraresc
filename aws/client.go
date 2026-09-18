@@ -2,22 +2,131 @@ package aws
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
+	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 type Client struct {
-	Config aws.Config
+	Config awsv2.Config
+	STS    *sts.Client
 }
 
-func NewClient(ctx context.Context) (*Client, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+type CallerIdentity struct {
+	AccountID    string
+	PrincipalARN string
+	UserID       string
+	Region       string
+}
+
+func NewClient(
+	ctx context.Context,
+	profile string,
+) (*Client, error) {
+
+	loadOptions := []func(*config.LoadOptions) error{}
+
+	if profile != "" {
+		loadOptions = append(
+			loadOptions,
+			config.WithSharedConfigProfile(profile),
+		)
+	}
+
+	cfg, err := config.LoadDefaultConfig(
+		ctx,
+		loadOptions...,
+	)
+
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf(
+			"failed to load AWS configuration: %w",
+			err,
+		)
 	}
 
 	return &Client{
 		Config: cfg,
+		STS:    sts.NewFromConfig(cfg),
 	}, nil
+}
+
+func (c *Client) Identity(
+	ctx context.Context,
+) (*CallerIdentity, error) {
+
+	result, err := c.STS.GetCallerIdentity(
+		ctx,
+		&sts.GetCallerIdentityInput{},
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to verify AWS identity: %w",
+			err,
+		)
+	}
+
+	return &CallerIdentity{
+		AccountID:    stringValue(result.Account),
+		PrincipalARN: stringValue(result.Arn),
+		UserID:       stringValue(result.UserId),
+		Region:       c.Config.Region,
+	}, nil
+}
+
+func ProfileRegion(
+	ctx context.Context,
+	cliPath string,
+	profile string,
+) (string, error) {
+
+	if cliPath == "" {
+		cliPath = "aws"
+	}
+
+	cmd := exec.CommandContext(
+		ctx,
+		cliPath,
+		"configure",
+		"get",
+		"region",
+		"--profile",
+		profile,
+	)
+
+	output, err := cmd.Output()
+
+	if err != nil {
+		return "", fmt.Errorf(
+			"failed to determine AWS region: %w",
+			err,
+		)
+	}
+
+	region := strings.TrimSpace(
+		string(output),
+	)
+
+	if region == "" {
+		return "", fmt.Errorf(
+			"AWS region is not configured for profile %q",
+			profile,
+		)
+	}
+
+	return region, nil
+}
+
+func stringValue(value *string) string {
+
+	if value == nil {
+		return ""
+	}
+
+	return *value
 }

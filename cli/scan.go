@@ -1,16 +1,70 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"context"
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	infraRuntime "infraresc/runtime"
+)
+
+var scanProfile string
 
 var scanCmd = &cobra.Command{
 	Use:   "scan",
-	Short: "Scan the cloud infrastructure",
+	Short: "Discover AWS infrastructure",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.Println("Scanning for Cloud Infrastructure...")
+
+		ctx := context.Background()
+
+		rt, err := infraRuntime.Initialize(
+			ctx,
+			scanProfile,
+		)
+
+		if err != nil {
+			return fmt.Errorf(
+				"%w\nRun 'infraresc auth login' first",
+				err,
+			)
+		}
+
+		fmt.Println("InfraResc Discovery")
+		fmt.Println()
+		fmt.Printf(
+			"Account:  %s\n",
+			rt.Identity.AccountID,
+		)
+		fmt.Printf(
+			"Region:   %s\n",
+			rt.Identity.Region,
+		)
+		fmt.Printf(
+			"Profile:  %s\n",
+			rt.Identity.Profile,
+		)
+
+		fmt.Println()
+		fmt.Println(
+			"Authenticated AWS runtime initialized.",
+		)
+
 		return nil
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(scanCmd)
+
+	scanCmd.Flags().StringVarP(
+		&scanProfile,
+		"profile",
+		"p",
+		"",
+		"AWS profile to use",
+	)
+
+	rootCmd.AddCommand(
+		scanCmd,
+	)
 }

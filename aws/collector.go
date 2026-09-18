@@ -2,8 +2,7 @@ package aws
 
 import (
 	"context"
-
-	"infraresc/state"
+	"fmt"
 )
 
 type Collector struct {
@@ -16,6 +15,25 @@ func NewCollector(client *Client) *Collector {
 	}
 }
 
-func (c *Collector) Collect(ctx context.Context) ([]state.Resource, error) {
-	return c.discovery.Discover(ctx)
+func (c *Collector) Collect(
+	ctx context.Context,
+) ([]string, error) {
+
+	if err := c.discovery.CheckRecorderConfiguration(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := c.discovery.CheckRecorder(ctx); err != nil {
+		return nil, err
+	}
+
+	resources, err := c.discovery.Resources(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"collecting AWS resources: %w",
+			err,
+		)
+	}
+
+	return resources, nil
 }
