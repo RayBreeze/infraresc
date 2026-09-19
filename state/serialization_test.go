@@ -21,17 +21,11 @@ func TestSerializeDeserializeSnapshotRoundTrip(t *testing.T) {
 			},
 			Order: []string{"vpc-123", "subnet-456"},
 		},
-		Configs: []ResourceConfig{{
-			ResourceID: "vpc-123", ARN: "arn:aws:ec2:ap-south-1:123456789012:vpc/vpc-123", Type: "AWS::EC2::VPC",
-			Service: "ec2", Region: "ap-south-1",
-			Properties: map[string]interface{}{"cidr_block": "10.0.0.0/16", "enable_dns": true, "tags": map[string]interface{}{"Name": "test-vpc"}},
-		}},
+		Configs: []ResourceConfig{{ResourceID: "vpc-123", ARN: "arn:aws:ec2:ap-south-1:123456789012:vpc/vpc-123", Type: "AWS::EC2::VPC", Service: "ec2", Region: "ap-south-1", Properties: map[string]interface{}{"cidr_block": "10.0.0.0/16", "enable_dns": true, "tags": map[string]interface{}{"Name": "test-vpc"}}}},
 		Warnings: []SnapshotWarning{{ResourceID: "vpc-123", Type: "partial", Message: "some configuration fields were unavailable"}},
 	}
-
 	data, err := SerializeSnapshot(original)
 	if err != nil { t.Fatalf("SerializeSnapshot returned error: %v", err) }
-
 	var decoded Snapshot
 	if err := json.Unmarshal(data, &decoded); err != nil { t.Fatalf("serialized snapshot is not valid JSON: %v", err) }
 	decoded, err = DeserializeSnapshot(data)
