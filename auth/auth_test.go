@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,10 +30,7 @@ func TestWriteAWSProfileCreatesAndReplacesProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if err := WriteAWSProfile(AWSProfile{
-		Name:   "infraresc",
-		Region: "ap-south-1",
-	}); err != nil {
+	if err := WriteAWSProfile(AWSProfile{Name: "infraresc", Region: "ap-south-1"}); err != nil {
 		t.Fatalf("WriteAWSProfile returned error: %v", err)
 	}
 
@@ -46,10 +44,7 @@ func TestWriteAWSProfileCreatesAndReplacesProfile(t *testing.T) {
 		t.Fatalf("generated config missing profile: %q", got)
 	}
 
-	if err := WriteAWSProfile(AWSProfile{
-		Name:   "infraresc",
-		Region: "us-east-1",
-	}); err != nil {
+	if err := WriteAWSProfile(AWSProfile{Name: "infraresc", Region: "us-east-1"}); err != nil {
 		t.Fatalf("second WriteAWSProfile returned error: %v", err)
 	}
 
@@ -92,16 +87,10 @@ func TestWriteAWSProfileRejectsMissingRequiredFields(t *testing.T) {
 }
 
 func TestManagerDelegatesToProvider(t *testing.T) {
-	provider := &fakeProvider{
-		identity: &Identity{
-			Provider:      "AWS",
-			Authenticated: true,
-		},
-	}
-
+	provider := &fakeProvider{identity: &Identity{Provider: "AWS", Authenticated: true}}
 	manager := NewManager(provider)
 
-	identity, err := manager.Status(nil, LoginOptions{Profile: "test"})
+	identity, err := manager.Status(context.Background(), LoginOptions{Profile: "test"})
 	if err != nil {
 		t.Fatalf("Status returned error: %v", err)
 	}
@@ -118,26 +107,17 @@ type fakeProvider struct {
 	lastProfile string
 }
 
-func (f *fakeProvider) Login(_ interfaceContext, opts LoginOptions) (*Identity, error) {
+func (f *fakeProvider) Login(_ context.Context, opts LoginOptions) (*Identity, error) {
 	f.lastProfile = opts.Profile
 	return f.identity, nil
 }
 
-func (f *fakeProvider) Logout(_ interfaceContext, opts LoginOptions) error {
+func (f *fakeProvider) Logout(_ context.Context, opts LoginOptions) error {
 	f.lastProfile = opts.Profile
 	return nil
 }
 
-func (f *fakeProvider) Status(_ interfaceContext, opts LoginOptions) (*Identity, error) {
+func (f *fakeProvider) Status(_ context.Context, opts LoginOptions) (*Identity, error) {
 	f.lastProfile = opts.Profile
 	return f.identity, nil
 }
-
-type interfaceContext interface {
-	Deadline() (deadlineTime, bool)
-	Done() <-chan struct{}
-	Err() error
-	Value(key any) any
-}
-
-type deadlineTime = struct{}
