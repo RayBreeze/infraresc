@@ -25,7 +25,6 @@ func TestArtifactRoundTrip(t *testing.T) {
 
 func TestArtifactRejectsEmptyPayloadAndUnsupportedMetadata(t *testing.T) {
 	if _, err := NewArtifact(nil, "account", "region", []byte("pass")); err == nil { t.Fatal("expected empty payload to be rejected") }
-
 	artifact, err := NewArtifact([]byte("payload"), "account", "region", []byte("pass"))
 	if err != nil { t.Fatalf("NewArtifact: %v", err) }
 	artifact.Version = "999"
