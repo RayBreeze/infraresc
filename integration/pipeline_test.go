@@ -30,39 +30,25 @@ func TestSnapshotSerializationFeedsGraphConstruction(t *testing.T) {
 	}
 
 	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
+	if err != nil { t.Fatalf("marshal snapshot: %v", err) }
 
 	var restored state.Snapshot
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("unmarshal snapshot: %v", err)
-	}
+	if err := json.Unmarshal(data, &restored); err != nil { t.Fatalf("unmarshal snapshot: %v", err) }
+	if !reflect.DeepEqual(original, restored) { t.Fatalf("snapshot changed across serialization: %#v != %#v", original, restored) }
 
-	if !reflect.DeepEqual(original, restored) {
-		t.Fatalf("snapshot changed across serialization: %#v != %#v", original, restored)
-	}
+	g := graph.BuildWithEdges(restored.Resources, restored.Edges)
+	if len(g.Nodes) != len(restored.Resources) { t.Fatalf("graph has %d nodes, want %d", len(g.Nodes), len(restored.Resources)) }
 
-	g := graph.Build(restored.Resources)
-	if len(g.Nodes) != len(restored.Resources) {
-		t.Fatalf("graph has %d nodes, want %d", len(g.Nodes), len(restored.Resources))
-	}
-
-	for _, resource := range restored.Resources {
-		node, ok := g.Nodes[resource.ID]
-		if !ok {
-			t.Fatalf("resource %q did not reach graph construction", resource.ID)
-		}
-		if node.ResourceType != resource.Type {
-			t.Fatalf("resource %q changed type during graph construction: got %q, want %q", resource.ID, node.ResourceType, resource.Type)
-		}
+	if got := g.Nodes["subnet-1"].Dependencies; !reflect.DeepEqual(got, []string{"vpc-1"}) {
+		t.Fatalf("subnet dependencies = %v, want [vpc-1]", got)
 	}
 
 	order, err := g.ResolveOrder()
-	if err != nil {
-		t.Fatalf("resolve graph order: %v", err)
-	}
-	if len(order) != len(restored.Resources) {
-		t.Fatalf("resolved %d resources, want %d", len(order), len(restored.Resources))
-	}
+	if err != nil { t.Fatalf("resolve graph order: %v", err) }
+	wantOrder := []string{"vpc-1", "subnet-1"}
+	if !reflect.DeepEqual(order, wantOrder) { t.Fatalf("resolved order = %v, want %v", order, wantOrder) }
+
+	graphSnapshot := g.Snapshot()
+	if !reflect.DeepEqual(graphSnapshot.Order, wantOrder) { t.Fatalf("graph snapshot order = %v, want %v", graphSnapshot.Order, wantOrder) }
+	if !reflect.DeepEqual(graphSnapshot.Nodes[1].Dependencies, []string{"vpc-1"}) { t.Fatalf("graph snapshot dependencies = %v, want [vpc-1]", graphSnapshot.Nodes[1].Dependencies) }
 }
