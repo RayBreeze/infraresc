@@ -89,8 +89,8 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 				},
 			)
 			if err != nil {
-				// Not every bucket has explicit encryption configuration.
-				// AWS-owned encryption is therefore not treated as an error.
+				// Not every bucket has explicit customer-managed KMS
+				// encryption. AWS-owned encryption does not create an edge.
 				continue
 			}
 
@@ -104,18 +104,19 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 				}
 
 				key := rule.ApplyServerSideEncryptionByDefault.KMSMasterKeyID
-
-				if key != nil {
-					add(
-						bucket,
-						resourceIDFromARN(str(key)),
-						"ENCRYPTED_WITH_KMS_KEY",
-					)
+				if key == nil {
+					continue
 				}
+
+				add(
+					bucket,
+					resourceIDFromARN(str(key)),
+					"ENCRYPTED_WITH_KMS_KEY",
+				)
 			}
 		}
 
-		// S3 replication -> destination bucket.
+		// S3 replication -> destination bucket and replication IAM role.
 		for _, bucket := range ids["AWS::S3::Bucket"] {
 			out, err := r.S3.GetBucketReplication(
 				ctx,
@@ -131,20 +132,24 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 				continue
 			}
 
+			if out.ReplicationConfiguration.Role != nil {
+				add(
+					bucket,
+					resourceIDFromARN(str(out.ReplicationConfiguration.Role)),
+					"USES_IAM_ROLE",
+				)
+			}
+
 			for _, rule := range out.ReplicationConfiguration.Rules {
-				if rule.Destination == nil {
+				if rule.Destination == nil || rule.Destination.Bucket == nil {
 					continue
 				}
 
-				destination := rule.Destination.Bucket
-
-				if destination != nil {
-					add(
-						bucket,
-						resourceIDFromARN(str(destination)),
-						"REPLICATES_TO_BUCKET",
-					)
-				}
+				add(
+					bucket,
+					resourceIDFromARN(str(rule.Destination.Bucket)),
+					"REPLICATES_TO_BUCKET",
+				)
 			}
 		}
 	}
@@ -192,6 +197,15 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 				)
 			}
 
+			// Lambda -> EFS access points.
+			for _, filesystem := range out.FileSystemConfigs {
+				add(
+					function,
+					resourceIDFromARN(str(filesystem.Arn)),
+					"USES_EFS_ACCESS_POINT",
+				)
+			}
+
 			// Lambda -> VPC.
 			if out.VpcConfig != nil {
 				add(
@@ -217,7 +231,7 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 				}
 			}
 
-			// Lambda -> dead-letter queue.
+			// Lambda -> dead-letter queue/topic.
 			if out.DeadLetterConfig != nil {
 				add(
 					function,
@@ -227,7 +241,7 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 			}
 		}
 
-		// Lambda Event Source Mapping -> event source.
+		// Lambda function -> event source.
 		for _, function := range ids["AWS::Lambda::Function"] {
 			paginator := lambda.NewListEventSourceMappingsPaginator(
 				r.Lambda,
@@ -248,7 +262,6 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 
 				for _, mapping := range out.EventSourceMappings {
 					sourceARN := str(mapping.EventSourceArn)
-
 					if sourceARN == "" {
 						continue
 					}
@@ -287,7 +300,7 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 				continue
 			}
 
-			// DynamoDB table -> KMS.
+			// DynamoDB table -> KMS key.
 			if out.Table.SSEDescription != nil {
 				add(
 					table,
@@ -298,31 +311,15 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 				)
 			}
 
-			// DynamoDB table -> stream.
-			if out.Table.LatestStreamArn != nil {
-				add(
-					table,
-					resourceIDFromARN(str(out.Table.LatestStreamArn)),
-					"HAS_STREAM",
-				)
-			}
+			// A DynamoDB stream ARN resolves back to the table identifier in
+			// this project's resource-ID scheme. That would create a self-edge,
+			// so the stream relationship is not emitted as a graph edge here.
 
-			// Global secondary indexes.
-			for _, index := range out.Table.GlobalSecondaryIndexes {
-				// The index is not necessarily discovered as a separate
-				// Resource Explorer resource, so this edge is intentionally
-				// omitted from the graph unless the index itself exists.
-				_ = index
-			}
+			// Global secondary indexes are logical children of the table and are
+			// not separate resources in the inventory represented by state.Resource.
 
-			// Global table replicas.
-			for _, replica := range out.Table.Replicas {
-				add(
-					table,
-					str(replica.RegionName),
-					"REPLICATED_TO_REGION",
-				)
-			}
+			// Global table replicas expose RegionName rather than a resource ID.
+			// Do not create pseudo-nodes for regions in the infrastructure graph.
 		}
 	}
 
@@ -331,34 +328,43 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 	// ============================================================
 
 	if r.RDS != nil {
-		// RDS instances -> DB subnet group / VPC / security groups.
-		for _, batch := range chunk(ids["AWS::RDS::DBInstance"], 100) {
+		// ------------------------------------------------------------
+		// DB instances
+		// ------------------------------------------------------------
+
+		// DescribeDBInstances accepts a single DBInstanceIdentifier. Do not
+		// pass only the first ID from an arbitrary chunk; query each discovered
+		// instance explicitly so every resource is processed.
+		for _, instanceID := range ids["AWS::RDS::DBInstance"] {
 			out, err := r.RDS.DescribeDBInstances(
 				ctx,
 				&rds.DescribeDBInstancesInput{
-					DBInstanceIdentifier: &batch[0],
+					DBInstanceIdentifier: &instanceID,
 				},
 			)
 			if err != nil {
 				return nil, fmt.Errorf(
 					"describing RDS instance %s: %w",
-					batch[0],
+					instanceID,
 					err,
 				)
 			}
 
 			for _, instance := range out.DBInstances {
-				instanceID := str(instance.DBInstanceIdentifier)
+				id := str(instance.DBInstanceIdentifier)
+				if id == "" {
+					id = instanceID
+				}
 
 				if instance.DBSubnetGroup != nil {
 					add(
-						instanceID,
+						id,
 						str(instance.DBSubnetGroup.DBSubnetGroupName),
 						"USES_DB_SUBNET_GROUP",
 					)
 
 					add(
-						instanceID,
+						id,
 						str(instance.DBSubnetGroup.VpcId),
 						"IN_VPC",
 					)
@@ -366,21 +372,111 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 
 				for _, group := range instance.VpcSecurityGroups {
 					add(
-						instanceID,
+						id,
 						str(group.VpcSecurityGroupId),
 						"USES_SECURITY_GROUP",
 					)
 				}
 
 				add(
-					instanceID,
+					id,
 					str(instance.DBClusterIdentifier),
 					"MEMBER_OF_RDS_CLUSTER",
 				)
+
+				// Storage encryption.
+				add(
+					id,
+					resourceIDFromARN(str(instance.KmsKeyId)),
+					"ENCRYPTED_WITH_KMS_KEY",
+				)
+
+				// Performance Insights encryption.
+				add(
+					id,
+					resourceIDFromARN(str(instance.PerformanceInsightsKMSKeyId)),
+					"PERFORMANCE_INSIGHTS_ENCRYPTED_WITH_KMS_KEY",
+				)
+
+				// Database activity stream encryption.
+				add(
+					id,
+					resourceIDFromARN(str(instance.ActivityStreamKmsKeyId)),
+					"ACTIVITY_STREAM_ENCRYPTED_WITH_KMS_KEY",
+				)
+
+				for _, parameterGroup := range instance.DBParameterGroups {
+					add(
+						id,
+						str(parameterGroup.DBParameterGroupName),
+						"USES_DB_PARAMETER_GROUP",
+					)
+				}
+
+				for _, optionGroup := range instance.OptionGroupMemberships {
+					add(
+						id,
+						str(optionGroup.OptionGroupName),
+						"USES_OPTION_GROUP",
+					)
+				}
+
+				for _, role := range instance.AssociatedRoles {
+					add(
+						id,
+						resourceIDFromARN(str(role.RoleArn)),
+						"USES_IAM_ROLE",
+					)
+				}
+
+				add(
+					id,
+					resourceIDFromARN(str(instance.MonitoringRoleArn)),
+					"USES_MONITORING_IAM_ROLE",
+				)
+
+				if instance.MasterUserSecret != nil {
+					add(
+						id,
+						resourceIDFromARN(str(instance.MasterUserSecret.SecretArn)),
+						"USES_MASTER_SECRET",
+					)
+					add(
+						id,
+						resourceIDFromARN(str(instance.MasterUserSecret.KmsKeyId)),
+						"MASTER_SECRET_ENCRYPTED_WITH_KMS_KEY",
+					)
+				}
+
+				// Read replica relationships.
+				add(
+					id,
+					str(instance.ReadReplicaSourceDBInstanceIdentifier),
+					"REPLICATED_FROM_RDS_INSTANCE",
+				)
+
+				for _, replicaID := range instance.ReadReplicaDBInstanceIdentifiers {
+					add(
+						id,
+						replicaID,
+						"HAS_READ_REPLICA",
+					)
+				}
+
+				for _, replicaClusterID := range instance.ReadReplicaDBClusterIdentifiers {
+					add(
+						id,
+						replicaClusterID,
+						"HAS_READ_REPLICA_CLUSTER",
+					)
+				}
 			}
 		}
 
-		// RDS clusters -> subnet group / security groups / instances.
+		// ------------------------------------------------------------
+		// DB clusters
+		// ------------------------------------------------------------
+
 		for _, cluster := range ids["AWS::RDS::DBCluster"] {
 			out, err := r.RDS.DescribeDBClusters(
 				ctx,
@@ -398,6 +494,9 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 
 			for _, dbCluster := range out.DBClusters {
 				clusterID := str(dbCluster.DBClusterIdentifier)
+				if clusterID == "" {
+					clusterID = cluster
+				}
 
 				add(
 					clusterID,
@@ -413,11 +512,125 @@ func (r *RelationshipDiscovery) discoverServiceRelationships(
 					)
 				}
 
+				add(
+					clusterID,
+					resourceIDFromARN(str(dbCluster.KmsKeyId)),
+					"ENCRYPTED_WITH_KMS_KEY",
+				)
+
+				add(
+					clusterID,
+					resourceIDFromARN(str(dbCluster.PerformanceInsightsKMSKeyId)),
+					"PERFORMANCE_INSIGHTS_ENCRYPTED_WITH_KMS_KEY",
+				)
+
+				add(
+					clusterID,
+					resourceIDFromARN(str(dbCluster.ActivityStreamKmsKeyId)),
+					"ACTIVITY_STREAM_ENCRYPTED_WITH_KMS_KEY",
+				)
+
+				add(
+					clusterID,
+					str(dbCluster.DBClusterParameterGroup),
+					"USES_DB_CLUSTER_PARAMETER_GROUP",
+				)
+
+				for _, optionGroup := range dbCluster.DBClusterOptionGroupMemberships {
+					add(
+						clusterID,
+						str(optionGroup.DBClusterOptionGroupName),
+						"USES_CLUSTER_OPTION_GROUP",
+					)
+				}
+
+				for _, role := range dbCluster.AssociatedRoles {
+					add(
+						clusterID,
+						resourceIDFromARN(str(role.RoleArn)),
+						"USES_IAM_ROLE",
+					)
+				}
+
+				add(
+					clusterID,
+					resourceIDFromARN(str(dbCluster.MonitoringRoleArn)),
+					"USES_MONITORING_IAM_ROLE",
+				)
+
+				if dbCluster.MasterUserSecret != nil {
+					add(
+						clusterID,
+						resourceIDFromARN(str(dbCluster.MasterUserSecret.SecretArn)),
+						"USES_MASTER_SECRET",
+					)
+					add(
+						clusterID,
+						resourceIDFromARN(str(dbCluster.MasterUserSecret.KmsKeyId)),
+						"MASTER_SECRET_ENCRYPTED_WITH_KMS_KEY",
+					)
+				}
+
 				for _, instance := range dbCluster.DBClusterMembers {
 					add(
 						clusterID,
 						str(instance.DBInstanceIdentifier),
 						"CONTAINS_RDS_INSTANCE",
+					)
+				}
+
+				for _, replicaID := range dbCluster.ReadReplicaIdentifiers {
+					add(
+						clusterID,
+						replicaID,
+						"HAS_READ_REPLICA_CLUSTER",
+					)
+				}
+
+				add(
+					clusterID,
+					str(dbCluster.ReplicationSourceIdentifier),
+					"REPLICATED_FROM_RDS_SOURCE",
+				)
+			}
+		}
+
+		// ------------------------------------------------------------
+		// DB subnet groups
+		// ------------------------------------------------------------
+
+		for _, subnetGroup := range ids["AWS::RDS::DBSubnetGroup"] {
+			out, err := r.RDS.DescribeDBSubnetGroups(
+				ctx,
+				&rds.DescribeDBSubnetGroupsInput{
+					DBSubnetGroupName: &subnetGroup,
+				},
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"describing RDS DB subnet group %s: %w",
+					subnetGroup,
+					err,
+				)
+			}
+
+			for _, group := range out.DBSubnetGroups {
+				groupID := str(group.DBSubnetGroupName)
+				if groupID == "" {
+					groupID = subnetGroup
+				}
+
+				add(
+					groupID,
+					str(group.VpcId),
+					"IN_VPC",
+				)
+
+				for _, subnet := range group.Subnets {
+					add(
+						groupID,
+						str(subnet.SubnetIdentifier),
+						"CONTAINS_SUBNET",
 					)
 				}
 			}
