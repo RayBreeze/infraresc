@@ -92,17 +92,27 @@ func resourceIDFromARN(arn string) string {
 
 	resource := parts[5]
 
-	// EC2 ARNs commonly use:
-	// subnet/subnet-xxxx
-	// instance/i-xxxx
-	// security-group/sg-xxxx
-	// volume/vol-xxxx
-	// network-interface/eni-xxxx
-	//
-	// AWS APIs expect only the actual resource ID.
-	if index := strings.LastIndex(resource, "/"); index >= 0 {
-		return resource[index+1:]
-	}
+	switch {
+	case strings.HasPrefix(resource, "function:"):
+		return strings.TrimPrefix(resource, "function:")
 
-	return resource
+	case strings.HasPrefix(resource, "db:"):
+		return strings.TrimPrefix(resource, "db:")
+
+	case strings.HasPrefix(resource, "cluster:"):
+		return strings.TrimPrefix(resource, "cluster:")
+
+	case strings.HasPrefix(resource, "table/"):
+		return strings.TrimPrefix(resource, "table/")
+
+	case strings.HasPrefix(resource, "bucket:"):
+		return strings.TrimPrefix(resource, "bucket:")
+
+	default:
+		if index := strings.LastIndex(resource, "/"); index >= 0 {
+			return resource[index+1:]
+		}
+
+		return resource
+	}
 }
