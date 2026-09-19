@@ -467,11 +467,20 @@ func (r *RelationshipDiscovery) Discover(
 
 func idsByType(resources []state.Resource) map[string][]string {
 	result := make(map[string][]string)
+	seen := make(map[string]struct{})
 
 	for _, resource := range resources {
 		if resource.ID == "" || resource.Type == "" {
 			continue
 		}
+
+		// Resource Explorer results can contain duplicate entries. Avoid
+		// sending duplicate IDs to the AWS Describe* APIs.
+		key := resource.Type + "\x00" + resource.ID
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
 
 		result[resource.Type] = append(result[resource.Type], resource.ID)
 	}
