@@ -13,33 +13,88 @@ import (
 func TestSnapshotSerializationFeedsGraphConstruction(t *testing.T) {
 	createdAt := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 	original := state.Snapshot{
-		Version: "0.2", CreatedAt: createdAt, AccountID: "123456789012", Region: "ap-south-1",
+		Version:   "0.2",
+		CreatedAt: createdAt,
+		AccountID: "123456789012",
+		Region:    "ap-south-1",
 		Resources: []state.Resource{
-			{ID: "vpc-1", ARN: "arn:aws:ec2:ap-south-1:123456789012:vpc/vpc-1", Type: "AWS::EC2::VPC", Service: "ec2", Region: "ap-south-1"},
-			{ID: "subnet-1", ARN: "arn:aws:ec2:ap-south-1:123456789012:subnet/subnet-1", Type: "AWS::EC2::Subnet", Service: "ec2", Region: "ap-south-1"},
+			{
+				ID:      "vpc-1",
+				ARN:     "arn:aws:ec2:ap-south-1:123456789012:vpc/vpc-1",
+				Type:    "AWS::EC2::VPC",
+				Service: "ec2",
+				Region:  "ap-south-1",
+			},
+			{
+				ID:      "subnet-1",
+				ARN:     "arn:aws:ec2:ap-south-1:123456789012:subnet/subnet-1",
+				Type:    "AWS::EC2::Subnet",
+				Service: "ec2",
+				Region:  "ap-south-1",
+			},
 		},
-		Edges: []state.Edge{{From: "subnet-1", To: "vpc-1", Relation: "belongs-to"}},
-		Configs: []state.ResourceConfig{{ResourceID: "vpc-1", ARN: "arn:aws:ec2:ap-south-1:123456789012:vpc/vpc-1", Type: "AWS::EC2::VPC", Service: "ec2", Region: "ap-south-1", Properties: map[string]interface{}{"cidr": "10.0.0.0/16"}},
+		Edges: []state.Edge{
+			{From: "subnet-1", To: "vpc-1", Relation: "belongs-to"},
+		},
+		Configs: []state.ResourceConfig{
+			{
+				ResourceID: "vpc-1",
+				ARN:        "arn:aws:ec2:ap-south-1:123456789012:vpc/vpc-1",
+				Type:       "AWS::EC2::VPC",
+				Service:    "ec2",
+				Region:     "ap-south-1",
+				Properties: map[string]interface{}{},
+			},
+		},
 	}
+
 	data, err := json.Marshal(original)
-	if err != nil { t.Fatalf("marshal snapshot: %v", err) }
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
 	var restored state.Snapshot
-	if err := json.Unmarshal(data, &restored); err != nil { t.Fatalf("unmarshal snapshot: %v", err) }
-	if !reflect.DeepEqual(original, restored) { t.Fatalf("snapshot changed across serialization: %#v != %#v", original, restored) }
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if !reflect.DeepEqual(original, restored) {
+		t.Fatalf("snapshot changed across serialization: %#v != %#v", original, restored)
+	}
 
 	g := graph.BuildWithEdges(restored.Resources, restored.Edges)
-	if got := g.Nodes["subnet-1"].Dependencies; !reflect.DeepEqual(got, []string{"vpc-1"}) { t.Fatalf("subnet dependencies = %v, want [vpc-1]", got) }
+	if got := g.Nodes["subnet-1"].Dependencies; !reflect.DeepEqual(got, []string{"vpc-1"}) {
+		t.Fatalf("subnet dependencies = %v, want [vpc-1]", got)
+	}
 	order, err := g.ResolveOrder()
-	if err != nil { t.Fatalf("resolve graph order: %v", err) }
+	if err != nil {
+		t.Fatalf("resolve graph order: %v", err)
+	}
 	wantOrder := []string{"vpc-1", "subnet-1"}
-	if !reflect.DeepEqual(order, wantOrder) { t.Fatalf("resolved order = %v, want %v", order, wantOrder) }
+	if !reflect.DeepEqual(order, wantOrder) {
+		t.Fatalf("resolved order = %v, want %v", order, wantOrder)
+	}
 
 	graphSnapshot := g.Snapshot()
-	if !reflect.DeepEqual(graphSnapshot.Order, wantOrder) { t.Fatalf("graph snapshot order = %v, want %v", graphSnapshot.Order, wantOrder) }
+	if !reflect.DeepEqual(graphSnapshot.Order, wantOrder) {
+		t.Fatalf("graph snapshot order = %v, want %v", graphSnapshot.Order, wantOrder)
+	}
 	subnetIndex := -1
 	for i, node := range graphSnapshot.Nodes {
-		if node.ID == "subnet-1" { subnetIndex = i; break }
+		if node.ID == "subnet-1" {
+			subnetIndex = i
+			break
+		}
 	}
-	if subnetIndex < 0 { t.Fatal("graph snapshot omitted subnet-1") }
-	if !reflect.DeepEqual(graphSnapshot.Nodes[subnetIndex].Dependencies, []string{"vpc-1"}) { t.Fatalf("graph snapshot dependencies = %v, want [vpc-1]", graphSnapshot.Nodes[subnetIndex].Dependencies) }
+	if subnetIndex < 0 {
+		t.Fatal("graph snapshot omitted subnet-1")
+	}
+	if !reflect.DeepEqual(
+		graphSnapshot.Nodes[subnetIndex].Dependencies,
+		[]string{"vpc-1"},
+	) {
+		t.Fatalf(
+			"graph snapshot dependencies = %v, want %v",
+			graphSnapshot.Nodes[subnetIndex].Dependencies,
+			[]string{"vpc-1"},
+		)
+	}
 }
