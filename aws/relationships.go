@@ -4,8 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"infraresc/state"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // RelationshipDiscovery builds the infrastructure graph by asking the
@@ -16,12 +21,20 @@ import (
 // It deliberately keeps discovery relationship-only: configuration belongs
 // in the later snapshot stage.
 type RelationshipDiscovery struct {
-	EC2 *ec2.Client
+	EC2      *ec2.Client
+	S3       *s3.Client
+	Lambda   *lambda.Client
+	DynamoDB *dynamodb.Client
+	RDS      *rds.Client
 }
 
 func NewRelationshipDiscovery(client *Client) *RelationshipDiscovery {
 	return &RelationshipDiscovery{
-		EC2: client.EC2,
+		EC2:      client.EC2,
+		S3:       client.S3,
+		Lambda:   client.Lambda,
+		DynamoDB: client.DynamoDB,
+		RDS:      client.RDS,
 	}
 }
 
@@ -239,6 +252,18 @@ func (r *RelationshipDiscovery) Discover(
 			for _, attachment := range volume.Attachments {
 				add(volumeID, str(attachment.InstanceId), "ATTACHED_TO_INSTANCE")
 			}
+
+			add(
+				volumeID,
+				str(volume.SnapshotId),
+				"CREATED_FROM_SNAPSHOT",
+			)
+
+			add(
+				volumeID,
+				str(volume.KmsKeyId),
+				"ENCRYPTED_WITH_KMS_KEY",
+			)
 		}
 	}
 
@@ -272,6 +297,143 @@ func (r *RelationshipDiscovery) Discover(
 		}
 	}
 
+	// VPCs -> DHCP options.
+	for _, batch := range chunk(ids["AWS::EC2::VPC"], 100) {
+		out, err := r.EC2.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{
+			VpcIds: batch,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describing VPCs: %w", err)
+		}
+
+		for _, vpc := range out.Vpcs {
+			vpcID := str(vpc.VpcId)
+
+			add(vpcID, str(vpc.DhcpOptionsId), "USES_DHCP_OPTIONS")
+		}
+	}
+
+	// Network ACLs -> VPC and subnets.
+	for _, batch := range chunk(ids["AWS::EC2::NetworkAcl"], 100) {
+		out, err := r.EC2.DescribeNetworkAcls(ctx, &ec2.DescribeNetworkAclsInput{
+			NetworkAclIds: batch,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describing network ACLs: %w", err)
+		}
+
+		for _, acl := range out.NetworkAcls {
+			aclID := str(acl.NetworkAclId)
+
+			add(aclID, str(acl.VpcId), "BELONGS_TO_VPC")
+
+			for _, association := range acl.Associations {
+				add(
+					aclID,
+					str(association.SubnetId),
+					"ASSOCIATED_WITH_SUBNET",
+				)
+			}
+		}
+	}
+
+	// Egress-only internet gateways -> VPC.
+	for _, batch := range chunk(ids["AWS::EC2::EgressOnlyInternetGateway"], 100) {
+		out, err := r.EC2.DescribeEgressOnlyInternetGateways(
+			ctx,
+			&ec2.DescribeEgressOnlyInternetGatewaysInput{
+				EgressOnlyInternetGatewayIds: batch,
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"describing egress-only internet gateways: %w",
+				err,
+			)
+		}
+
+		for _, gateway := range out.EgressOnlyInternetGateways {
+			gatewayID := str(gateway.EgressOnlyInternetGatewayId)
+
+			if gateway.Attachments == nil {
+				continue
+			}
+
+			for _, attachment := range gateway.Attachments {
+				add(
+					gatewayID,
+					str(attachment.VpcId),
+					"ATTACHED_TO_VPC",
+				)
+			}
+		}
+	}
+
+	// VPC endpoints -> VPC, subnets, route tables, security groups and ENIs.
+	for _, batch := range chunk(ids["AWS::EC2::VPCEndpoint"], 100) {
+		out, err := r.EC2.DescribeVpcEndpoints(ctx, &ec2.DescribeVpcEndpointsInput{
+			VpcEndpointIds: batch,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describing VPC endpoints: %w", err)
+		}
+
+		for _, endpoint := range out.VpcEndpoints {
+			endpointID := str(endpoint.VpcEndpointId)
+
+			add(endpointID, str(endpoint.VpcId), "BELONGS_TO_VPC")
+
+			for _, subnetID := range endpoint.SubnetIds {
+				add(endpointID, subnetID, "IN_SUBNET")
+			}
+
+			for _, routeTableID := range endpoint.RouteTableIds {
+				add(
+					endpointID,
+					routeTableID,
+					"ASSOCIATED_WITH_ROUTE_TABLE",
+				)
+			}
+
+			for _, group := range endpoint.Groups {
+				add(
+					endpointID,
+					str(group.GroupId),
+					"USES_SECURITY_GROUP",
+				)
+			}
+
+			for _, eniID := range endpoint.NetworkInterfaceIds {
+				add(
+					endpointID,
+					eniID,
+					"HAS_NETWORK_INTERFACE",
+				)
+			}
+		}
+	}
+
+	// VPC flow logs -> their source resource.
+	// ResourceId may refer to VPC, subnet or network interface.
+	for _, batch := range chunk(ids["AWS::EC2::FlowLog"], 100) {
+		out, err := r.EC2.DescribeFlowLogs(ctx, &ec2.DescribeFlowLogsInput{
+			FlowLogIds: batch,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describing flow logs: %w", err)
+		}
+
+		for _, flowLog := range out.FlowLogs {
+			flowLogID := str(flowLog.FlowLogId)
+
+			add(
+				flowLogID,
+				str(flowLog.ResourceId),
+				"CAPTURES_TRAFFIC_FROM",
+			)
+		}
+	}
+
 	// VPC peering -> both participating VPCs.
 	for _, batch := range chunk(ids["AWS::EC2::VPCPeeringConnection"], 100) {
 		out, err := r.EC2.DescribeVpcPeeringConnections(ctx, &ec2.DescribeVpcPeeringConnectionsInput{
@@ -292,6 +454,13 @@ func (r *RelationshipDiscovery) Discover(
 			}
 		}
 	}
+
+	serviceEdges, err := r.discoverServiceRelationships(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	edges = append(edges, serviceEdges...)
 
 	return deduplicateEdges(edges), nil
 }

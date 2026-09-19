@@ -8,8 +8,12 @@ import (
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/resourceexplorer2"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -17,6 +21,10 @@ type Client struct {
 	Config           awsv2.Config
 	STS              *sts.Client
 	EC2              *ec2.Client
+	S3               *s3.Client
+	Lambda           *lambda.Client
+	DynamoDB         *dynamodb.Client
+	RDS              *rds.Client
 	ResourceExplorer *resourceexplorer2.Client
 }
 
@@ -57,6 +65,10 @@ func NewClient(
 		Config:           cfg,
 		STS:              sts.NewFromConfig(cfg),
 		EC2:              ec2.NewFromConfig(cfg),
+		S3:               s3.NewFromConfig(cfg),
+		Lambda:           lambda.NewFromConfig(cfg),
+		DynamoDB:         dynamodb.NewFromConfig(cfg),
+		RDS:              rds.NewFromConfig(cfg),
 		ResourceExplorer: resourceexplorer2.NewFromConfig(cfg),
 	}, nil
 }

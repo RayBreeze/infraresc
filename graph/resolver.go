@@ -12,7 +12,6 @@ func Build(resources []state.Resource) *Graph {
 		node := &Node{
 			ID:           resource.ID,
 			ResourceType: resource.Type,
-			Dependencies: resource.Dependencies,
 		}
 
 		g.AddNode(node)
