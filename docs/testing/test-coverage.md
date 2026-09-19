@@ -1,190 +1,230 @@
 # InfraResc Test Coverage
 
-> Status: testing work completed on the `test` branch. This document records what is intentionally covered, what remains untested, and which areas were deliberately left alone.
+> **Current baseline:** the focused test suite is now part of the main codebase and is verified by CI with `go test ./...` on Go 1.27.1. This document records what is covered, what is deliberately deferred, and where the architecture still needs stronger testing seams.
 
-## 1. Testing approach
+## 1. Testing philosophy
 
-The test suite is intentionally **behavior-focused rather than coverage-count-focused**.
+InfraResc is an infrastructure-recovery tool, so the important question is not simply "how much code is covered?" but whether the tests protect the contracts that make a snapshot safe to reason about and eventually recover from.
 
-The goal of the current tests is to protect the contracts that are already implemented without creating a large mock-heavy suite around unfinished AWS and recovery workflows.
+The current suite follows four principles:
 
-The current testing layers are:
+1. **Behavior over implementation details.**
+2. **Deterministic tests over live-AWS tests wherever possible.**
+3. **Small, explicit seams instead of a large mock hierarchy.**
+4. **Do not test placeholder workflows as if they were implemented.**
 
-```text
-Pure logic
-  ├── graph
-  └── state serialization
+The current suite contains **38 top-level test functions** across these areas:
 
-AWS boundary helpers
-  ├── resource identity
-  ├── relationship helpers
-  └── snapshot collector contracts
+| Area | Test file(s) | Tests | What is protected |
+|---|---|---:|---|
+| Graph | `graph/graph_test.go` | 8 | construction, edge-to-dependency conversion, ordering, determinism, missing dependencies, cycles |
+| State | `state/serialization_test.go` | 3 | JSON round-trip, optional-field behavior, invalid JSON |
+| AWS discovery | `aws/discovery_test.go` | 2 | ARN/resource identity extraction and nil-safe strings |
+| AWS relationships | `aws/relationships_test.go` | 5 | filtering, batching, edge deduplication, pointer extraction, service ARN parsing |
+| AWS snapshot/collector | `aws/snapshot_test.go`, `aws/collector_test.go` | 7 | config conversion, resource indexing/filtering, warnings, collector initialization, edge normalization |
+| Auth/config | `auth/auth_test.go` | 4 | profile editing, replacement, permissions, validation, provider delegation |
+| CLI | `cli/commands_test.go` | 2 | command registration and important flags |
+| Local integration | `integration/pipeline_test.go` | 1 | snapshot serialization → graph construction → dependency ordering |
+| Crypto artifacts/envelope | `crypto/artifact_test.go`, `crypto/envelope_test.go` | 6 | implemented artifact/envelope behavior, tamper/wrong-password rejection, metadata validation |
+| **Total** | | **38** | |
 
-Authentication/config
-  └── provider delegation + AWS config writing
-
-CLI
-  └── command registration + important flags
-
-Local integration
-  └── snapshot serialization → graph construction
-```
-
-The suite deliberately does **not** pretend that placeholder workflows are implemented.
+The test count is descriptive rather than a quality target. Adding tests merely to increase the number would not improve this suite.
 
 ---
 
-## 2. Coverage by component
+## 2. Graph
 
-### 2.1 Graph
-
-**Test file:** `graph/graph_test.go`
+**Tests:** `graph/graph_test.go`
 
 Covered:
 
 - Resource-to-node construction.
+- Conversion of snapshot edges into graph dependencies through `BuildWithEdges`.
 - Dependency ordering.
+- Deterministic ordering of independent nodes.
+- Deterministic graph snapshots.
 - Missing dependency detection.
 - Dependency-cycle detection.
 - Inclusion of independent nodes.
 
-These tests cover the current graph resolver's core behavioral contract.
+This is one of the strongest parts of the current suite because it tests actual recovery-relevant behavior rather than getters or data-structure trivia.
 
-**Important limitation:** `graph.Build()` currently receives only `[]state.Resource`. It does not translate `Snapshot.Edges` into `Node.Dependencies`. Therefore the tests do not claim that AWS-discovered relationships currently drive recovery ordering.
+### Important boundary
 
-**Still needed later:**
+The graph tests establish that **when edges are supplied**, the graph can represent and resolve those dependencies. They do not establish that every AWS relationship discovered by the AWS layer is semantically a recovery prerequisite.
 
-- Snapshot edges → graph dependencies.
-- Deterministic recovery ordering.
-- Recovery-specific dependency semantics once those are defined.
+That distinction matters:
 
----
+```text
+AWS observed relationship
+        ↓
+edge normalization
+        ↓
+recovery dependency semantics
+        ↓
+graph ordering
+```
 
-### 2.2 State and snapshot serialization
-
-**Test file:** `state/serialization_test.go`
-
-Covered:
-
-- Complete snapshot JSON round-trip.
-- Preservation of resource/configuration data through serialization.
-- Omission of optional warnings when empty.
-- Rejection of invalid JSON.
-
-This protects the current JSON representation without asserting a canonical serialization format that has not yet been implemented.
-
-**Still needed later:**
-
-- Canonical/deterministic serialization.
-- Schema/version migration behavior.
-- Validation of normalized recovery configuration.
+The first two stages have coverage; the semantic mapping is still an architectural responsibility of the recovery design.
 
 ---
 
-### 2.3 AWS discovery
+## 3. State and snapshot serialization
 
-**Test file:** `aws/discovery_test.go`
+**Tests:** `state/serialization_test.go`
 
 Covered:
 
-- Resource ID extraction from representative ARNs:
-  - Lambda.
-  - RDS instance.
-  - RDS cluster.
-  - DynamoDB table.
-  - S3 bucket.
-  - slash-based EC2 resources.
-  - plain resource identifiers.
-  - malformed ARN fallback.
+- Full snapshot JSON round-trip.
+- Preservation of resources, edges, graph state, configs, and warnings.
+- Omission of empty optional warnings.
+- Rejection of malformed JSON.
+
+The tests intentionally do **not** claim that the serialization is canonical or suitable for cryptographic hashing.
+
+### Still needed
+
+- Schema/version migration tests.
+- Canonical/deterministic serialization if the application requires it.
+- Validation of normalized, recovery-ready configuration.
+
+---
+
+## 4. AWS resource discovery
+
+**Tests:** `aws/discovery_test.go`
+
+Covered:
+
+- Lambda ARN identity extraction.
+- RDS instance ARN identity extraction.
+- RDS cluster ARN identity extraction.
+- DynamoDB table ARN identity extraction.
+- S3 bucket identity extraction.
+- Slash-delimited EC2 resource identity.
+- Plain resource identifiers.
+- Malformed/non-ARN fallback behavior.
 - Nil-safe string extraction.
 
-The tests focus on deterministic transformation logic rather than making live Resource Explorer calls.
+The tests deliberately isolate deterministic transformation logic instead of requiring Resource Explorer or AWS credentials.
 
-**Still needed later:**
+### Not covered
 
-- Deterministic API-level discovery tests.
-- Pagination behavior against a controllable AWS boundary.
-- Handling of representative Resource Explorer responses.
+- Resource Explorer API calls.
+- Pagination.
+- AWS API errors/retries.
+- Real account discovery.
+
+Those require a controlled AWS boundary or a dedicated integration environment.
 
 ---
 
-### 2.4 AWS relationships
+## 5. AWS relationship discovery
 
-**Test file:** `aws/relationships_test.go`
+**Tests:** `aws/relationships_test.go`
 
 Covered:
 
-- Resource filtering by type.
-- Duplicate ID removal.
-- Relationship batching/chunking.
+- Resource grouping/filtering by CloudFormation resource type.
+- Duplicate resource-ID removal.
+- Relationship batching.
+- Non-positive batch-size handling.
 - Edge deduplication.
-- String pointer extraction.
-- Service-resource ID extraction from ARNs.
+- Pointer-to-string extraction.
+- DynamoDB stream ARN parsing.
+- SQS queue ARN parsing.
+- Lambda function ARN parsing.
+- Empty/malformed service ARNs.
 
-These tests cover the pure helper behavior used by relationship discovery.
+The ARN tests are important because AWS service ARN resource formats are not uniform.
 
-**Still needed later:**
+### Not covered
 
-- API-level relationship discovery using controlled AWS responses.
-- End-to-end conversion of discovered relationships into recovery dependencies.
-- Explicit distinction between observed relationships and recovery prerequisites.
+The suite does not currently execute the complete relationship discovery process against controlled AWS SDK responses. The production code still depends heavily on concrete AWS SDK clients, so a large mock suite would be more work than value at this stage.
 
 ---
 
-### 2.5 AWS snapshot collection
+## 6. AWS snapshot collection and edge normalization
 
-**Test file:** `aws/snapshot_test.go`
+**Tests:** `aws/snapshot_test.go`, `aws/collector_test.go`
 
 Covered:
 
-- Conversion of collected AWS values into `ResourceConfig`.
-- Preservation of resource identity during config conversion.
-- Snapshot resource-type extraction.
-- Resource map construction.
+- Conversion of an AWS response value into a `ResourceConfig`.
+- Preservation of resource identity during configuration conversion.
+- Filtering resources by CloudFormation type.
+- Resource indexing by ID.
 - Snapshot warning construction.
-- Collector behavior when service clients are unavailable, including warning generation and initialized snapshot collections.
+- Snapshot metadata initialization.
+- Initialization of snapshot slices.
+- Warning generation when service clients are unavailable.
+- Conversion of native relationship IDs into canonical resource ARNs.
+- Duplicate/self/missing edge filtering.
+- Rejection of ambiguous native IDs.
 
-The tests intentionally avoid constructing a large fake implementation of every AWS SDK service.
+This gives the current AWS-to-state boundary useful deterministic coverage.
 
-**Still needed later:**
+### Important limitation
 
-- Controlled service API tests.
-- Normalization from raw AWS SDK responses into portable recovery configuration.
-- Service-specific recovery adapters.
-- Explicit tests for unsupported/external recovery artifacts.
+The collector tests do **not** prove that every EC2/S3/Lambda/DynamoDB/RDS configuration field is correctly captured. They test collector contracts and shared transformation helpers, not every AWS SDK field.
 
----
+That is intentional. A test for every SDK field would create a large maintenance burden without necessarily improving confidence in InfraResc's behavior.
 
-### 2.6 Authentication and AWS profile configuration
+### Larger architectural gap
 
-**Test file:** `auth/auth_test.go`
+The current `ResourceConfig.Properties` representation is still largely based on AWS SDK response structures. A future recovery implementation should introduce:
 
-Covered:
+```text
+AWS SDK response
+       ↓
+normalized portable configuration
+       ↓
+resource-specific recovery adapter
+       ↓
+AWS create/update input
+```
 
-- Removal of only the targeted AWS profile block.
-- Creation of an AWS profile.
-- Replacement of an existing profile without duplication.
-- Region replacement.
-- File permission enforcement (`0600`).
-- Required-field validation.
-- `Manager.Status` delegation through the `AuthProvider` seam.
-
-The provider interface is used where practical, so the manager behavior can be tested without launching the real AWS CLI.
-
-**Still needed later:**
-
-- A command-runner seam if deterministic tests of `aws login/logout/sts` invocation are required.
-- End-to-end browser/AWS CLI authentication testing in an environment with AWS CLI credentials.
+That boundary will be one of the most important future testing seams.
 
 ---
 
-### 2.7 CLI
+## 7. Authentication and AWS profile configuration
 
-**Test file:** `cli/commands_test.go`
+**Tests:** `auth/auth_test.go`
 
 Covered:
 
-- Registration of the current top-level command groups:
+- Removing only the requested AWS profile block.
+- Creating a profile.
+- Replacing an existing profile.
+- Updating the region without duplicating the profile.
+- Enforcing `0600` permissions on the generated AWS config.
+- Rejecting missing/blank profile names and regions.
+- Testing `Manager.Status` through the `AuthProvider` interface.
+
+The provider seam is useful because manager behavior can be tested without invoking the real AWS CLI.
+
+### Not covered
+
+The concrete provider still launches the AWS CLI directly. Deterministic tests for:
+
+- `aws login`
+- `aws logout`
+- `aws sts get-caller-identity`
+
+would benefit from a small command-runner seam.
+
+That seam should be introduced only if those paths become important enough to justify it.
+
+---
+
+## 8. CLI
+
+**Tests:** `cli/commands_test.go`
+
+Covered:
+
+- Registration of the current top-level commands:
   - `auth`
   - `scan`
   - `snapshot`
@@ -192,85 +232,133 @@ Covered:
   - `recover`
   - `media`
   - `verify`
-- Important `scan` and `snapshot` flags.
+- `scan --profile/-p`.
+- `snapshot --profile/-p`.
+- `snapshot --output/-o`.
 
-This is intentionally a smoke-level test. It checks that the CLI surface is wired together without attempting to test every Cobra implementation detail.
+This is deliberately a smoke-level test. It verifies the public command surface without coupling the suite to Cobra's internal implementation.
 
-**Still needed later:**
+### Not covered
 
-- Command-level tests once commands perform meaningful work.
-- File-output tests for `snapshot`.
-- Recovery-plan/execute command tests once those workflows exist.
-- Media and verification command tests once their underlying functionality exists.
+- Actual command execution.
+- Snapshot file output.
+- Recovery planning/execution commands.
+- Media commands.
+- Diff behavior.
+- Verification behavior.
+
+Those should gain tests when the underlying workflows become real.
 
 ---
 
-### 2.8 Local integration pipeline
+## 9. Local integration pipeline
 
-**Test file:** `integration/pipeline_test.go`
+**Test:** `integration/pipeline_test.go`
 
-Covered pipeline:
+The current integration test exercises:
 
 ```text
-state.Snapshot
-      ↓
+Snapshot
+   ↓
 JSON serialization
-      ↓
+   ↓
 JSON deserialization
-      ↓
-graph.Build()
-      ↓
-graph.ResolveOrder()
+   ↓
+Graph construction with edges
+   ↓
+Dependency resolution
+   ↓
+Graph snapshot
 ```
 
-The test verifies that a realistic snapshot survives serialization and that its resources can subsequently enter the graph layer.
+It verifies that resource/edge information survives the serialization boundary and can subsequently drive graph construction and ordering.
 
-This is currently the most useful integration test because it crosses package boundaries without requiring AWS credentials, network access, or a heavyweight mock environment.
+This is currently the most valuable integration test because it crosses package boundaries while remaining deterministic and AWS-free.
 
-**Important limitation:** snapshot edges are currently not consumed by `graph.Build()`, so the integration test intentionally does not claim relationship-driven recovery ordering.
+### Next integration boundary
+
+Once recovery planning exists, the natural next test should become:
+
+```text
+snapshot
+   ↓
+normalized configuration
+   ↓
+recovery graph
+   ↓
+recovery plan
+```
+
+That can remain AWS-free and should be added before introducing live recovery tests.
 
 ---
 
-## 3. What is deliberately not tested
+## 10. Crypto artifacts and envelopes
 
-### 3.1 Cryptography
+**Tests:** `crypto/artifact_test.go`, `crypto/envelope_test.go`
 
-**Deliberately untouched.**
+The current suite has focused tests for the **implemented crypto artifact/envelope behavior**:
 
-The existing `crypto/` test suite is outside this testing pass. No new crypto gaps were introduced or addressed by these batches.
+- Artifact round-trip.
+- Artifact metadata.
+- Snapshot hash binding.
+- Artifact deserialization.
+- Empty-payload rejection.
+- Unsupported artifact-version rejection.
+- Encryption/decryption round-trip.
+- Wrong-password rejection.
+- Ciphertext tampering rejection.
+- Unsupported envelope metadata rejection.
+- Empty-password rejection.
 
-In particular, this pass does **not** attempt to solve:
+These tests validate existing primitives and artifact behavior.
 
-- canonical serialization for hashing,
+They do **not** attempt to resolve broader cryptographic architecture questions such as:
+
+- canonical serialization policy,
 - trusted-key storage,
-- replay protection,
 - key-management policy,
-- end-to-end crypto/media integration.
+- replay protection,
+- end-to-end trust/verification design.
 
-Those are architectural/application-layer concerns around the existing crypto primitives.
-
----
-
-### 3.2 Live AWS integration
-
-No tests currently make real AWS calls.
-
-Reasons:
-
-1. They would require credentials and a real AWS environment.
-2. Results would depend on external infrastructure.
-3. They would be expensive and potentially destructive if extended into recovery.
-4. Several AWS components currently depend directly on concrete SDK clients.
-
-A future AWS integration layer should use either controlled service seams or a deliberately selected AWS-compatible test environment rather than scattering mocks throughout the codebase.
+Those concerns remain outside this testing pass.
 
 ---
 
-### 3.3 Recovery
+## 11. Live AWS integration
 
-Recovery is not meaningfully implemented yet, so there is no useful recovery-execution test suite to add.
+There are currently no tests that intentionally make real AWS calls.
 
-The following remain future work:
+That is appropriate for the default unit/integration suite because live AWS tests would introduce:
+
+- credentials as a test dependency,
+- network dependence,
+- account-specific state,
+- cost,
+- nondeterminism,
+- potential resource mutation.
+
+The preferred future architecture is:
+
+```text
+production AWS client
+          │
+          ├── small interface seam
+          │
+controlled test implementation
+          ↓
+deterministic AWS workflow tests
+```
+
+A deliberately selected AWS-compatible environment can also be considered later, but it should not be introduced simply to increase test count.
+
+---
+
+## 12. Recovery, diff, and media
+
+### Recovery
+
+The meaningful recovery pipeline is not fully implemented yet:
 
 ```text
 Snapshot
@@ -278,8 +366,6 @@ Snapshot
 Normalize configuration
    ↓
 Build recovery graph
-   ↓
-Resolve dependencies
    ↓
 Recoverability analysis
    ↓
@@ -292,160 +378,183 @@ AWS execution
 Recovery validation
 ```
 
-Testing should be added as those stages become real, rather than testing placeholder CLI output.
+The current tests therefore stop before pretending that recovery exists.
 
----
+Future tests should cover each stage independently, with the execution layer isolated behind a controllable AWS boundary.
 
-### 3.4 Media
+### Diff
 
-`media create`, `media inspect`, and `media validate` currently expose CLI placeholders.
+The current `diff` workflow is not yet a substantive diff engine.
 
-No substantial media tests were added because there is no implemented media format or persistence workflow to test yet.
-
-Once implemented, the important tests should cover:
-
-- package creation,
-- manifest/artifact layout,
-- corrupted/missing files,
-- inspection,
-- validation,
-- compatibility/version handling.
-
----
-
-### 3.5 Diff
-
-The current `diff` command is a placeholder.
-
-No substantive diff tests were added.
-
-Once the diff engine operates on normalized snapshots, it should be tested independently of the CLI for:
+When implemented, tests should cover:
 
 - added resources,
 - removed resources,
-- changed configurations,
-- dependency changes,
+- changed configuration,
+- changed dependencies,
 - deterministic output.
+
+### Media
+
+The media workflow is not yet a substantive persistence/validation system.
+
+When implemented, tests should cover:
+
+- artifact/package creation,
+- manifest layout,
+- missing/corrupted artifacts,
+- inspection,
+- validation,
+- version/compatibility behavior.
+
+The Linux CI build has non-Windows stubs for the Windows-specific external-media functions so that the CLI package remains cross-platform compilable. Those stubs are compatibility behavior, not a replacement for media workflow tests.
 
 ---
 
-## 4. Architecture seams for future integration testing
+## 13. Architecture seams: current assessment
 
-The current architecture is sufficient for **local package-level and state/graph integration testing**, but not yet for deep deterministic AWS integration tests.
-
-### Existing useful seams
+### Strong seams
 
 ```text
 Auth Manager
-    ↓
+      ↓
 AuthProvider interface
 
-Snapshot/state
-    ↓
-plain Go data structures
+State
+      ↓
+serialization
 
 State
-    ↓
-JSON serialization
+      ↓
+Graph / BuildWithEdges
 
-State
-    ↓
-Graph
+AWS helpers
+      ↓
+state transformation
 
 CLI
-    ↓
+      ↓
 runtime / AWS collector
 ```
 
-### Current weak seam
+These seams are already sufficient for meaningful:
 
-The AWS layer largely holds concrete AWS SDK clients.
+- unit tests,
+- state/graph integration tests,
+- authentication/config tests,
+- deterministic AWS transformation tests.
+
+### Weak seam
+
+The AWS discovery, relationship, and snapshot layers still depend substantially on concrete AWS SDK clients.
 
 That makes this easy:
 
 ```text
-AWS-free data → transformation → state → graph
+AWS-free data
+      ↓
+transformation
+      ↓
+state
+      ↓
+graph
 ```
 
 but makes this harder:
 
 ```text
 controlled AWS response
-       ↓
-AWS discovery
-       ↓
+      ↓
+AWS API workflow
+      ↓
 relationships
-       ↓
+      ↓
 snapshot
-       ↓
+      ↓
 recovery
 ```
 
-We should **not** introduce a large mocking framework merely to increase test count.
-
-A better future approach is to introduce small interfaces at the AWS boundaries that actually need deterministic integration tests, when those workflows become important.
+The correct response is **not** to add a huge mocking framework. Introduce small interfaces only at the AWS boundaries that become important to deterministic integration tests.
 
 ---
 
-## 5. Testing backlog
+## 14. Current testing backlog
 
-### High priority when implementation lands
+### Highest priority when the corresponding implementation lands
 
-1. Snapshot edges → graph dependencies.
-2. Deterministic graph/recovery ordering.
+1. Snapshot edge semantics → recovery dependency semantics.
+2. Deterministic recovery ordering.
 3. Normalized AWS configuration.
 4. Recovery planning.
-5. Recovery execution through a controlled AWS seam.
-6. Recovery validation.
-7. Diff engine.
-8. Media creation/inspection/validation.
+5. Recoverability analysis.
+6. Recovery execution through a controlled AWS seam.
+7. Recovery validation.
+8. Diff engine.
+9. Media artifact creation/inspection/validation.
+10. Schema/version migration.
 
-### Medium priority
+### Useful later
 
-- AWS API pagination/error-path integration tests.
-- CLI command behavior around implemented workflows.
-- Schema/version migration tests.
+- AWS API pagination/error-path tests.
+- CLI behavior tests for implemented commands.
 - Runtime integration tests.
+- Cross-platform tests for platform-specific functionality.
 
-### Lower priority / avoid unless justified
+### Avoid unless justified
 
+- One test for every AWS SDK field.
+- Tests that merely restate standard-library behavior.
 - Tests for trivial getters/setters.
-- Tests that duplicate standard-library behavior.
-- One test per AWS SDK field.
-- Large mock suites that reproduce the AWS SDK instead of testing InfraResc behavior.
+- Large mock hierarchies that reproduce AWS SDK behavior.
+- Coverage-driven tests with no meaningful behavioral contract.
 
 ---
 
-## 6. Current test philosophy
+## 15. CI baseline
 
-The target is not “maximum number of tests.”
+The repository's Go test workflow runs:
 
-The target is:
+```text
+go test ./...
+```
 
-> **Enough tests to detect regressions in meaningful InfraResc behavior while keeping the suite deterministic, maintainable, and aligned with the implementation actually present in the repository.**
+using Go **1.27.1** on `ubuntu-latest`.
 
-As recovery functionality is implemented, the test suite should grow around the system's architectural contracts rather than around placeholder commands.
+The complete suite has been verified by GitHub Actions after the current testing changes.
+
+No claim is made here about live AWS recovery testing; CI is intentionally AWS-credential-free.
 
 ---
 
-## 7. Current status summary
+## 16. Overall assessment
 
-| Component | Current tests | Status |
-|---|---|---|
-| Graph | Core resolver behavior | Covered |
-| State | Serialization/round-trip | Covered |
-| AWS discovery | Pure identity helpers | Covered |
-| AWS relationships | Pure helper behavior | Covered |
-| AWS snapshots | Collector contracts/helpers | Covered |
-| Auth/config | Provider seam + profile writing | Covered |
-| CLI | Command tree + key flags | Smoke covered |
-| Local integration | State → graph pipeline | Covered |
-| Crypto | Existing suite only | Deliberately untouched |
-| Live AWS integration | None | Deliberately deferred |
-| Media | None | Not implemented |
-| Diff | None | Placeholder |
-| Recovery planner | None | Not implemented |
-| Recovery executor | None | Not implemented |
-| Recovery validator | None | Not implemented |
+The current suite is a **focused behavioral regression suite**, not a full end-to-end recovery test system.
 
-This document should be updated when a new implemented workflow creates a meaningful testing seam.
+It provides meaningful protection for the parts of InfraResc that are currently implemented:
+
+- graph construction and ordering,
+- snapshot/state persistence,
+- AWS identity and relationship transformations,
+- snapshot collector contracts,
+- authentication/configuration,
+- CLI wiring,
+- local cross-package state → graph behavior,
+- implemented artifact/envelope behavior.
+
+Its main limitation is not "too few tests." The larger limitation is that several important product-level contracts do not exist yet:
+
+```text
+portable recovery configuration
+            ↓
+recovery semantics
+            ↓
+recovery planner
+            ↓
+AWS execution
+            ↓
+validation
+```
+
+Those should become the next major testing targets as the implementation matures.
+
+> **Testing objective:** keep the current suite small, deterministic, and behavior-focused, while expanding it at the architectural boundaries that become real parts of the recovery system.
