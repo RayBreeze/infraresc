@@ -30,10 +30,12 @@ func (s *SnapshotCollector) collectLambda(
 		"AWS::Lambda::Function",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.Lambda.GetFunction(
 			ctx,
 			&lambda.GetFunctionInput{
-				FunctionName: &resource.ID,
+				FunctionName: &apiID,
 			},
 		)
 
@@ -70,7 +72,7 @@ func (s *SnapshotCollector) collectLambda(
 		concurrency, err := s.client.Lambda.GetFunctionConcurrency(
 			ctx,
 			&lambda.GetFunctionConcurrencyInput{
-				FunctionName: &resource.ID,
+				FunctionName: &apiID,
 			},
 		)
 
@@ -94,7 +96,7 @@ func (s *SnapshotCollector) collectLambda(
 		paginator := lambda.NewListEventSourceMappingsPaginator(
 			s.client.Lambda,
 			&lambda.ListEventSourceMappingsInput{
-				FunctionName: &resource.ID,
+				FunctionName: &apiID,
 			},
 		)
 
