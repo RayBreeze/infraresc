@@ -76,9 +76,7 @@ func TestSerializeDeserializeSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("DeserializeSnapshot returned error: %v", err)
 	}
 	if !reflect.DeepEqual(decoded, original) {
-		t.Fatalf("round trip changed snapshot
-original: %#v
-decoded: %#v", original, decoded)
+		t.Fatalf("round trip changed snapshot\\noriginal: %#v\\ndecoded: %#v", original, decoded)
 	}
 }
 

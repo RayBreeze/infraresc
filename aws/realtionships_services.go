@@ -333,17 +333,13 @@ func serviceResourceIDFromARN(raw string) string {
 	}
 
 	parts := strings.SplitN(raw, ":", 6)
-	if len(parts) != 6 || parts[0] != "arn" {
+	if len(parts) != 6 || parts[0] != "arn" || parts[5] == "" {
 		return ""
 	}
 
-	service := parts[2]
 	resource := parts[5]
-	if resource == "" {
-		return ""
-	}
 
-	switch service {
+	switch parts[2] {
 	case "lambda":
 		const prefix = "function:"
 		if !strings.HasPrefix(resource, prefix) {
@@ -355,6 +351,8 @@ func serviceResourceIDFromARN(raw string) string {
 		}
 		return name
 	default:
+		resource = strings.TrimPrefix(resource, "table/")
+		resource = strings.TrimPrefix(resource, "queue/")
 		if index := strings.IndexByte(resource, '/'); index >= 0 {
 			resource = resource[:index]
 		}
