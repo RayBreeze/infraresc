@@ -34,10 +34,12 @@ func (s *SnapshotCollector) collectRDS(
 		"AWS::RDS::DBInstance",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.RDS.DescribeDBInstances(
 			ctx,
 			&rds.DescribeDBInstancesInput{
-				DBInstanceIdentifier: &resource.ID,
+				DBInstanceIdentifier: &apiID,
 			},
 		)
 
@@ -77,10 +79,12 @@ func (s *SnapshotCollector) collectRDS(
 		"AWS::RDS::DBCluster",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.RDS.DescribeDBClusters(
 			ctx,
 			&rds.DescribeDBClustersInput{
-				DBClusterIdentifier: &resource.ID,
+				DBClusterIdentifier: &apiID,
 			},
 		)
 
@@ -120,10 +124,12 @@ func (s *SnapshotCollector) collectRDS(
 		"AWS::RDS::DBSubnetGroup",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.RDS.DescribeDBSubnetGroups(
 			ctx,
 			&rds.DescribeDBSubnetGroupsInput{
-				DBSubnetGroupName: &resource.ID,
+				DBSubnetGroupName: &apiID,
 			},
 		)
 

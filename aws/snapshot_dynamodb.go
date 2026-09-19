@@ -30,10 +30,12 @@ func (s *SnapshotCollector) collectDynamoDB(
 		"AWS::DynamoDB::Table",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.DynamoDB.DescribeTable(
 			ctx,
 			&dynamodb.DescribeTableInput{
-				TableName: &resource.ID,
+				TableName: &apiID,
 			},
 		)
 
@@ -70,7 +72,7 @@ func (s *SnapshotCollector) collectDynamoDB(
 		backups, err := s.client.DynamoDB.DescribeContinuousBackups(
 			ctx,
 			&dynamodb.DescribeContinuousBackupsInput{
-				TableName: &resource.ID,
+				TableName: &apiID,
 			},
 		)
 
@@ -95,7 +97,7 @@ func (s *SnapshotCollector) collectDynamoDB(
 		pitr, err := s.client.DynamoDB.DescribeContinuousBackups(
 			ctx,
 			&dynamodb.DescribeContinuousBackupsInput{
-				TableName: &resource.ID,
+				TableName: &apiID,
 			},
 		)
 

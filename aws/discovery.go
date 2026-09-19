@@ -62,13 +62,18 @@ func (d *Discovery) Resources(
 				continue
 			}
 
+			// Resource Explorer gives us the canonical AWS ARN.
+			// The ARN is the identity used throughout InfraResc.
+			//
+			// resourceIDFromARN() must only be used when an
+			// AWS service API requires the native identifier.
+			arn := *resource.Arn
+
 			resources = append(
 				resources,
 				state.Resource{
-					ID: resourceIDFromARN(
-						*resource.Arn,
-					),
-					ARN:  *resource.Arn,
+					ID:   arn,
+					ARN:  arn,
 					Type: resourceType,
 					Service: stringValue(
 						resource.Service,
@@ -84,8 +89,15 @@ func (d *Discovery) Resources(
 	return resources, nil
 }
 
+// resourceIDFromARN converts a canonical AWS ARN into the
+// native identifier expected by service-specific AWS APIs.
+//
+// IMPORTANT:
+// This function must NOT be used to populate state.Resource.ID.
+// InfraResc uses the full ARN as the canonical resource identity.
 func resourceIDFromARN(arn string) string {
 	parts := strings.SplitN(arn, ":", 6)
+
 	if len(parts) != 6 {
 		return arn
 	}

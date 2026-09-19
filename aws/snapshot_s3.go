@@ -30,7 +30,9 @@ func (s *SnapshotCollector) collectS3(
 		"AWS::S3::Bucket",
 	) {
 
-		bucket := resource.ID
+		// S3 APIs expect the bucket's native name rather than
+		// the canonical ARN stored in Resource.ID.
+		bucket := resourceIDFromARN(resource.ARN)
 
 		// --------------------------------------------------------
 		// Basic bucket information
@@ -73,7 +75,9 @@ func (s *SnapshotCollector) collectS3(
 				resource,
 				versioning,
 			); err == nil {
-				config.Properties["snapshot_component"] = "versioning"
+				config.Properties["snapshot_component"] =
+					"versioning"
+
 				configs = append(configs, config)
 			}
 		}
@@ -94,7 +98,9 @@ func (s *SnapshotCollector) collectS3(
 				resource,
 				encryption,
 			); err == nil {
-				config.Properties["snapshot_component"] = "encryption"
+				config.Properties["snapshot_component"] =
+					"encryption"
+
 				configs = append(configs, config)
 			}
 		}
@@ -115,7 +121,9 @@ func (s *SnapshotCollector) collectS3(
 				resource,
 				lifecycle,
 			); err == nil {
-				config.Properties["snapshot_component"] = "lifecycle"
+				config.Properties["snapshot_component"] =
+					"lifecycle"
+
 				configs = append(configs, config)
 			}
 		}
@@ -136,7 +144,9 @@ func (s *SnapshotCollector) collectS3(
 				resource,
 				publicAccess,
 			); err == nil {
-				config.Properties["snapshot_component"] = "public_access_block"
+				config.Properties["snapshot_component"] =
+					"public_access_block"
+
 				configs = append(configs, config)
 			}
 		}
@@ -157,7 +167,9 @@ func (s *SnapshotCollector) collectS3(
 				resource,
 				policy,
 			); err == nil {
-				config.Properties["snapshot_component"] = "policy"
+				config.Properties["snapshot_component"] =
+					"policy"
+
 				configs = append(configs, config)
 			}
 		}
@@ -178,7 +190,9 @@ func (s *SnapshotCollector) collectS3(
 				resource,
 				notification,
 			); err == nil {
-				config.Properties["snapshot_component"] = "notifications"
+				config.Properties["snapshot_component"] =
+					"notifications"
+
 				configs = append(configs, config)
 			}
 		}
@@ -199,7 +213,9 @@ func (s *SnapshotCollector) collectS3(
 				resource,
 				tags,
 			); err == nil {
-				config.Properties["snapshot_component"] = "tags"
+				config.Properties["snapshot_component"] =
+					"tags"
+
 				configs = append(configs, config)
 			}
 		}

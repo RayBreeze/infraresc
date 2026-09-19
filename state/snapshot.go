@@ -12,9 +12,21 @@ type Snapshot struct {
 	Resources []Resource `json:"resources"`
 	Edges     []Edge     `json:"edges"`
 
-	Configs []ResourceConfig `json:"configs"`
+	Graph DependencyGraph `json:"graph"`
 
+	Configs  []ResourceConfig  `json:"configs"`
 	Warnings []SnapshotWarning `json:"warnings,omitempty"`
+}
+
+type DependencyGraph struct {
+	Nodes []GraphNode `json:"nodes"`
+	Order []string    `json:"order"`
+}
+
+type GraphNode struct {
+	ID           string   `json:"id"`
+	ResourceType string   `json:"resource_type"`
+	Dependencies []string `json:"dependencies,omitempty"`
 }
 
 type ResourceConfig struct {

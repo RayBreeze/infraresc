@@ -35,12 +35,21 @@ func (s *SnapshotCollector) collectEC2(
 		"AWS::EC2::Instance",
 	)
 
-	instanceMap := resourceMap(instances)
+	// AWS API responses use native instance IDs, so keep a native-ID
+	// lookup map even though Resource.ID is now the canonical ARN.
+	instanceMap := make(map[string]state.Resource, len(instances))
 
 	var instanceIDs []string
 
 	for _, resource := range instances {
-		instanceIDs = append(instanceIDs, resource.ID)
+		apiID := resourceIDFromARN(resource.ARN)
+
+		instanceIDs = append(
+			instanceIDs,
+			apiID,
+		)
+
+		instanceMap[apiID] = resource
 	}
 
 	for _, batch := range chunk(instanceIDs, 100) {
@@ -108,10 +117,12 @@ func (s *SnapshotCollector) collectEC2(
 		"AWS::EC2::Subnet",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.EC2.DescribeSubnets(
 			ctx,
 			&ec2.DescribeSubnetsInput{
-				SubnetIds: []string{resource.ID},
+				SubnetIds: []string{apiID},
 			},
 		)
 
@@ -151,10 +162,12 @@ func (s *SnapshotCollector) collectEC2(
 		"AWS::EC2::SecurityGroup",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.EC2.DescribeSecurityGroups(
 			ctx,
 			&ec2.DescribeSecurityGroupsInput{
-				GroupIds: []string{resource.ID},
+				GroupIds: []string{apiID},
 			},
 		)
 
@@ -194,10 +207,12 @@ func (s *SnapshotCollector) collectEC2(
 		"AWS::EC2::VPC",
 	) {
 
+		apiID := resourceIDFromARN(resource.ARN)
+
 		out, err := s.client.EC2.DescribeVpcs(
 			ctx,
 			&ec2.DescribeVpcsInput{
-				VpcIds: []string{resource.ID},
+				VpcIds: []string{apiID},
 			},
 		)
 
