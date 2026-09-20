@@ -29,7 +29,7 @@ The Windows installer checks for AWS CLI v2 and installs it if required.
 - AWS CLI v2
 
 ## Quick Start
-
+> Note:  Administrator privileges are required to run this program. Please run your powershell or cmd in admin mode.
 ### 1. Configure InfraResc
 
 Configure your InfraResc authentication settings:
