@@ -3,6 +3,7 @@
 A Command line interface (CLI) based physical backup and recovery tool for Amazon Web Services [AWS] based cloud infrastructure.
 
 InfraResc discovers AWS infrastructure, creates encrypted snapshots, stores them on portable media, verifies infrastructure state, and recovers missing or changed resources.
+![InfraResc](assets/diagram.png)
 
 ## Features
 
